@@ -1,9 +1,6 @@
 use std::{f32::consts::FRAC_PI_2, ops::Range};
 use bevy::{
-    prelude::*,
-    window::CursorGrabMode,
-    window::Window,
-    input::mouse::MouseMotion,
+    input::mouse::MouseMotion, prelude::*, window::{CursorGrabMode, Window}
 };
 
 
@@ -71,7 +68,7 @@ fn setup(
                 Name::new("Cube"),
                 Mesh3d(cube_mesh.clone()),
                 MeshMaterial3d(cube_material.clone()),
-                Transform::from_xyz(x as f32 * 1.0, 0.5, z as f32 * 1.0),
+                Transform::from_xyz(x as f32 * 2.0 + 0.5, 0.5, z as f32 * 2.0 + 0.5),
             ));
         }
     }
@@ -83,6 +80,7 @@ fn grab_cursor(mut windows: Query<&mut Window>) {
     window.cursor_options.grab_mode = CursorGrabMode::Locked;
     window.cursor_options.visible = false;
 }
+
 
 fn player_movement(
     mut camera_query: Query<&mut Transform, With<Camera>>,
@@ -149,13 +147,14 @@ fn player_movement(
 fn place_block(
     camera_query: Query<(&Camera, &GlobalTransform)>,
     window_query: Query<&Window>,
-    block_query: Query<&Transform>, // Simplified query
+    block_query: Query<(Entity, &Transform)>,
     mouse_button: Res<ButtonInput<MouseButton>>,
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
-    if !mouse_button.just_pressed(MouseButton::Left) {
+    // Only proceed if either left or right mouse button was just pressed
+    if !mouse_button.just_pressed(MouseButton::Left) && !mouse_button.just_pressed(MouseButton::Right) {
         return;
     }
 
@@ -171,56 +170,64 @@ fn place_block(
             let mut hit_position = None;
             let mut hit_normal = None;
             let mut closest_distance = max_distance;
+            let mut hit_entity = None;
 
             // Check for intersections with existing blocks
-            for transform in block_query.iter() {
+            for (entity, transform) in block_query.iter() {
                 let block_pos = transform.translation;
-                // Define block bounds (assuming 1x1x1 blocks)
                 let min = block_pos - Vec3::splat(0.5);
                 let max = block_pos + Vec3::splat(0.5);
 
-                // Ray-box intersection check
                 if let Some((t, normal)) = ray_box_intersection(ray_origin, ray_direction, min, max) {
                     if t < closest_distance {
                         closest_distance = t;
                         hit_position = Some(ray_origin + ray_direction * t);
                         hit_normal = Some(normal);
+                        hit_entity = Some(entity);
                     }
                 }
             }
 
-            // If we hit a block, place a new one adjacent to it
-            if let (Some(hit_pos), Some(normal)) = (hit_position, hit_normal) {
-                // Round the hit position first
-                let hit_pos_rounded = Vec3::new(
-                    hit_pos.x.round(),
-                    hit_pos.y.round()-0.5,
-                    hit_pos.z.round(),
-                );
-                
-                // Then add the normal to get the new block position
-                let grid_pos = hit_pos_rounded + normal;
+            if let (Some(hit_pos), Some(normal), Some(entity)) = (hit_position, hit_normal, hit_entity) {
+                if mouse_button.just_pressed(MouseButton::Left) {
+                    // Place new block
+                    let hit_pos_rounded = Vec3::new(
+                        smart_round(hit_pos.x) - 0.5,
+                        smart_round(hit_pos.y) - 0.5,
+                        smart_round(hit_pos.z) - 0.5,
+                    );
+                    
+                    let grid_pos = hit_pos_rounded + normal;
 
-                println!("Hit pos: {:?}", hit_pos);
-                println!("Hit pos rounded: {:?}", hit_pos_rounded);
-                println!("Normal: {:?}", normal);
-                println!("Final grid pos: {:?}", grid_pos);
+                    // Create shared mesh and material
+                    let cube_mesh = meshes.add(Cuboid::default());
+                    let cube_material = materials.add(Color::srgb(0.8, 0.7, 0.6));
 
-                // Create shared mesh and material
-                let cube_mesh = meshes.add(Cuboid::default());
-                let cube_material = materials.add(Color::srgb(0.8, 0.7, 0.6));
-
-                // Spawn a new cube at the grid position
-                commands.spawn((
-                    Name::new("Cube"),
-                    Mesh3d(cube_mesh),
-                    MeshMaterial3d(cube_material),
-                    Transform::from_translation(grid_pos),
-                ));
+                    // Spawn a new cube at the grid position
+                    commands.spawn((
+                        Name::new("Cube"),
+                        Mesh3d(cube_mesh),
+                        MeshMaterial3d(cube_material),
+                        Transform::from_translation(grid_pos),
+                    ));
+                } else if mouse_button.just_pressed(MouseButton::Right) {
+                    // Remove the block that was hit
+                    commands.entity(entity).despawn();
+                }
             }
         }
     }
 }
+
+fn smart_round(x: f32) -> f32 {
+    if x.fract() == 0.0 {
+        x
+    } else {
+        x.ceil()
+    }
+}
+
+
 
 
 
@@ -271,9 +278,9 @@ fn ray_box_intersection(
         tmin = tzmin;
     }
 
-    if tzmax < tmax {
-        tmax = tzmax;
-    }
+    // if tzmax < tmax {
+    //     tmax = tzmax; // Not needed, only for calc
+    // }
 
     if tmin < 0.0 {
         return None;
