@@ -2,6 +2,7 @@ use std::{f32::consts::FRAC_PI_2, ops::Range};
 use bevy::{
     prelude::*,
     window::CursorGrabMode,
+    window::Window,
     input::mouse::MouseMotion,
 };
 
@@ -35,6 +36,7 @@ fn main() {
         .init_resource::<CameraSettings>()
         .add_systems(Startup, (setup, grab_cursor))
         .add_systems(Update, player_movement)
+        .add_systems(Update, place_block)
         .run();
 }
 
@@ -43,43 +45,38 @@ fn setup(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
+    // Camera
     commands.spawn((
         Name::new("Camera"),
         Camera3d::default(),
-        Transform::from_xyz(4.0, 4.0, 4.0) // Typical Minecraft eye height
-            .looking_at(Vec3::ZERO, Vec3::Z), // Look at origin, using Z as up
-
+        Transform::from_xyz(4.0, 4.0, 4.0)
+            .looking_at(Vec3::ZERO, Vec3::Z),
     ));
 
-    // Ground plane
-    // commands.spawn((
-    //     Name::new("Plane"),
-    //     Mesh3d(meshes.add(Plane3d::default().mesh().size(50.0, 50.0))),
-    //     MeshMaterial3d(materials.add(StandardMaterial {
-    //         base_color: Color::srgb(0.3, 0.5, 0.3),
-    //         cull_mode: None,
-    //         ..default()
-    //     })),
-    // ));
-
-    // Add some test cubes
-    for x in -CHUNK_SIZE_HALF..=CHUNK_SIZE_HALF {
-        for z in -CHUNK_SIZE_HALF..=CHUNK_SIZE_HALF {
-            commands.spawn((
-                Name::new("Cube"),
-                Mesh3d(meshes.add(Cuboid::default())),
-                MeshMaterial3d(materials.add(Color::srgb(0.8, 0.7, 0.6))),
-                Transform::from_xyz(x as f32 * 2.0, 0.5, z as f32 * 2.0),
-            ));
-        }
-    }
-
+    // Light
     commands.spawn((
         Name::new("Light"),
         PointLight::default(),
         Transform::from_xyz(3.0, 8.0, 5.0),
     ));
+
+    // Create shared mesh and material for instancing
+    let cube_mesh = meshes.add(Cuboid::default());
+    let cube_material = materials.add(Color::srgb(0.8, 0.7, 0.6));
+
+    // Spawn cubes using the same mesh and material handles
+    for x in -CHUNK_SIZE_HALF..=CHUNK_SIZE_HALF {
+        for z in -CHUNK_SIZE_HALF..=CHUNK_SIZE_HALF {
+            commands.spawn((
+                Name::new("Cube"),
+                Mesh3d(cube_mesh.clone()),
+                MeshMaterial3d(cube_material.clone()),
+                Transform::from_xyz(x as f32 * 1.0, 0.5, z as f32 * 1.0),
+            ));
+        }
+    }
 }
+
 
 fn grab_cursor(mut windows: Query<&mut Window>) {
     let mut window = windows.single_mut();
@@ -147,4 +144,160 @@ fn player_movement(
     }
 
     camera.translation += velocity * camera_settings.speed * time.delta_secs();
+}
+
+fn place_block(
+    camera_query: Query<(&Camera, &GlobalTransform)>,
+    window_query: Query<&Window>,
+    block_query: Query<&Transform>, // Simplified query
+    mouse_button: Res<ButtonInput<MouseButton>>,
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+) {
+    if !mouse_button.just_pressed(MouseButton::Left) {
+        return;
+    }
+
+    let (camera, camera_transform) = camera_query.single();
+    let window = window_query.single();
+
+    if let Some(cursor_position) = window.cursor_position() {
+        if let Ok(ray) = camera.viewport_to_world(camera_transform, cursor_position) {
+            let max_distance = 10.0;
+            let ray_direction = ray.direction.normalize();
+            let ray_origin = ray.origin;
+
+            let mut hit_position = None;
+            let mut hit_normal = None;
+            let mut closest_distance = max_distance;
+
+            // Check for intersections with existing blocks
+            for transform in block_query.iter() {
+                let block_pos = transform.translation;
+                // Define block bounds (assuming 1x1x1 blocks)
+                let min = block_pos - Vec3::splat(0.5);
+                let max = block_pos + Vec3::splat(0.5);
+
+                // Ray-box intersection check
+                if let Some((t, normal)) = ray_box_intersection(ray_origin, ray_direction, min, max) {
+                    if t < closest_distance {
+                        closest_distance = t;
+                        hit_position = Some(ray_origin + ray_direction * t);
+                        hit_normal = Some(normal);
+                    }
+                }
+            }
+
+            // If we hit a block, place a new one adjacent to it
+            if let (Some(hit_pos), Some(normal)) = (hit_position, hit_normal) {
+                // Round the hit position first
+                let hit_pos_rounded = Vec3::new(
+                    hit_pos.x.round(),
+                    hit_pos.y.round()-0.5,
+                    hit_pos.z.round(),
+                );
+                
+                // Then add the normal to get the new block position
+                let grid_pos = hit_pos_rounded + normal;
+
+                println!("Hit pos: {:?}", hit_pos);
+                println!("Hit pos rounded: {:?}", hit_pos_rounded);
+                println!("Normal: {:?}", normal);
+                println!("Final grid pos: {:?}", grid_pos);
+
+                // Create shared mesh and material
+                let cube_mesh = meshes.add(Cuboid::default());
+                let cube_material = materials.add(Color::srgb(0.8, 0.7, 0.6));
+
+                // Spawn a new cube at the grid position
+                commands.spawn((
+                    Name::new("Cube"),
+                    Mesh3d(cube_mesh),
+                    MeshMaterial3d(cube_material),
+                    Transform::from_translation(grid_pos),
+                ));
+            }
+        }
+    }
+}
+
+
+
+fn ray_box_intersection(
+    ray_origin: Vec3,
+    ray_direction: Vec3,
+    box_min: Vec3,
+    box_max: Vec3,
+) -> Option<(f32, Vec3)> {
+    let mut tmin = (box_min.x - ray_origin.x) / ray_direction.x;
+    let mut tmax = (box_max.x - ray_origin.x) / ray_direction.x;
+
+    if tmin > tmax {
+        std::mem::swap(&mut tmin, &mut tmax);
+    }
+
+    let mut tymin = (box_min.y - ray_origin.y) / ray_direction.y;
+    let mut tymax = (box_max.y - ray_origin.y) / ray_direction.y;
+
+    if tymin > tymax {
+        std::mem::swap(&mut tymin, &mut tymax);
+    }
+
+    if tmin > tymax || tymin > tmax {
+        return None;
+    }
+
+    if tymin > tmin {
+        tmin = tymin;
+    }
+
+    if tymax < tmax {
+        tmax = tymax;
+    }
+
+    let mut tzmin = (box_min.z - ray_origin.z) / ray_direction.z;
+    let mut tzmax = (box_max.z - ray_origin.z) / ray_direction.z;
+
+    if tzmin > tzmax {
+        std::mem::swap(&mut tzmin, &mut tzmax);
+    }
+
+    if tmin > tzmax || tzmin > tmax {
+        return None;
+    }
+
+    if tzmin > tmin {
+        tmin = tzmin;
+    }
+
+    if tzmax < tmax {
+        tmax = tzmax;
+    }
+
+    if tmin < 0.0 {
+        return None;
+    }
+
+    // Calculate the hit point and normal
+    let hit_point = ray_origin + ray_direction * tmin;
+    let center = (box_min + box_max) * 0.5;
+    let half_size = (box_max - box_min) * 0.5;
+    
+    // Use a smaller epsilon value
+    const EPSILON: f32 = 0.0001;
+    
+    // Calculate the relative position from the center
+    let relative_pos = (hit_point - center).abs();
+    
+    // Determine which face was hit by comparing distances
+    let normal = if (relative_pos.x - half_size.x).abs() < EPSILON {
+        Vec3::new(if hit_point.x > center.x { 1.0 } else { -1.0 }, 0.0, 0.0)
+    } else if (relative_pos.y - half_size.y).abs() < EPSILON {
+        Vec3::new(0.0, if hit_point.y > center.y { 1.0 } else { -1.0 }, 0.0)
+    } else {
+        Vec3::new(0.0, 0.0, if hit_point.z > center.z { 1.0 } else { -1.0 })
+    };
+
+    Some((tmin, normal))
 }
