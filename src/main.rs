@@ -1,11 +1,12 @@
 use std::{f32::consts::FRAC_PI_2, ops::Range};
 use bevy::{
-    input::mouse::MouseMotion, prelude::*, window::{CursorGrabMode, Window}
+    input::mouse::MouseMotion, 
+    prelude::*, window::{CursorGrabMode, Window}
 };
 
 
 const CHUNK_SIZE:i16 = 64; 
-const CHUNK_SIZE_HALF:i16 = CHUNK_SIZE/2; 
+const _CHUNK_SIZE_HALF:i16 = CHUNK_SIZE/2; 
 
 
 
@@ -62,8 +63,8 @@ fn setup(
     let cube_material = materials.add(Color::srgb(0.8, 0.7, 0.6));
 
     // Spawn cubes using the same mesh and material handles
-    for x in -CHUNK_SIZE_HALF..=CHUNK_SIZE_HALF {
-        for z in -CHUNK_SIZE_HALF..=CHUNK_SIZE_HALF {
+    for x in 0..=CHUNK_SIZE {
+        for z in 0..=CHUNK_SIZE {
             commands.spawn((
                 Name::new("Cube"),
                 Mesh3d(cube_mesh.clone()),
@@ -80,6 +81,8 @@ fn grab_cursor(mut windows: Query<&mut Window>) {
     window.cursor_options.grab_mode = CursorGrabMode::Locked;
     window.cursor_options.visible = false;
 }
+
+
 
 
 fn player_movement(
@@ -220,10 +223,18 @@ fn place_block(
 }
 
 fn smart_round(x: f32) -> f32 {
-    if x.fract() == 0.0 {
-        x
+    if x >= 0.0 {
+        if x.fract() == 0.0 {
+            x
+        } else {
+            x.ceil()
+        }
     } else {
-        x.ceil()
+        if x.fract() == 0.0 {
+            x
+        } else {
+            x.floor()
+        }
     }
 }
 
